@@ -1,0 +1,346 @@
+//________________________________________________________________
+// 
+//
+//Date 05/10/2016: This is to read geant.root file
+//                      -Nihar 
+//____________________________________________________________
+
+
+#include "StJetTreeMcMaker.h"
+#include "StChain.h"
+#include "StEvent.h"
+#include "StEventTypes.h"
+#include "StEmcUtil/geometry/StEmcGeom.h"
+#include "StEmcUtil/projection/StEmcPosition.h"
+#include "StEmcUtil/filters/StEmcFilter.h"
+#include "TH2.h"
+#include "TH1.h"
+#include "TFile.h"
+#include <vector>
+#include "TVector.h"
+#include "TVector3.h"
+#include <math.h>
+#include "TNtuple.h"
+#include <TString.h>
+#include "TClonesArray.h"
+#include "TLorentzVector.h"
+#include "TRandom.h"
+#include "StEventUtilities/StuRefMult.hh"
+#include "StEventUtilities/StuFtpcRefMult.hh"
+#include "StThreeVector.hh"
+#include "StEvent/StEnumerations.h"
+#include "StMcEvent.hh"
+#include "StMcVertex.hh"
+#include "StMcTrack.hh"
+#include "StMcEventMaker/StMcEventMaker.h"
+#include "StMcEventTypes.hh"
+#include "StPrimaryVertex.h"
+#include "StBTofHeader.h"
+//#include "StMuEvent.h"
+#include <TSQLServer.h>
+#include <TSQLRow.h>
+#include <TSQLResult.h>
+
+#include "St_db_Maker/St_db_Maker.h"
+#include "StDetectorDbMaker/StDetectorDbTriggerID.h"
+
+#include <emcStatus.h>
+#include "tables/St_emcStatus_Table.h"
+
+#include "tables/St_emcPed_Table.h"
+//#include "L2Result.h"
+#include "StTriggerData.h"
+#include "StTriggerData2007.h"
+//#include "StDaqLib/TRG/trgStructures.h"
+#include "StDaqLib/TRG/trgStructures2007.h"
+//#include "StDaqLib/TRG/L2pedResults2006.h"
+//#include "StDaqLib/TRG/L2gammaResult2007.h"
+#include "StDaqLib/EMC/StEmcDecoder.h"
+//#include "L2gammaResult.h"
+#include "StEvent/StTriggerIdCollection.h"
+
+#include "StEvent/StTriggerId.h"
+#include "StEmcRawMaker/StBemcTables.h"
+#include "StMuDSTMaker/COMMON/StMuDstMaker.h"
+#include "StMuDSTMaker/COMMON/StMuDst.h"
+#include "StMuDSTMaker/COMMON/StMuEvent.h"
+#include "StMuDSTMaker/COMMON/StMuEmcCollection.h"
+#include "StMuDSTMaker/COMMON/StMuTofHit.h"
+#include "StMuDSTMaker/COMMON/StMuBTofPidTraits.h"
+#include "StMuDSTMaker/COMMON/StMuPrimaryVertex.h"
+#include "StMuDSTMaker/COMMON/StMuTrack.h"
+#include "StTriggerData.h"
+
+ 
+#include "GammaJetTrack.h"
+#include "GammaJetEvent.h"
+#include "GammaJetTower.h"
+#include "GammaJetTowerUtil.h"
+#include <exception>
+#include <vector>
+
+void muEventInfo(StMuEvent&, const Int_t&);
+ClassImp(StJetTreeMcMaker)
+
+//------------------------------------------------------------------------------------
+void StJetTreeMcMaker::setDbMaker(St_db_Maker* dbMaker)
+{
+  mDbMaker = dbMaker;
+}
+//-----------------------------------------------------------------------------------
+StJetTreeMcMaker::StJetTreeMcMaker(const char *name,char *dataType):StMaker(name){ 
+  
+
+ pTrMatchArr = 0;
+ pTriMatchEtaArr =0;
+ pTrMatchPhiArr = 0;
+ pTrIndexArray = 0;
+ pTrEtaArray =0;
+ pTrPhiArray =0;
+
+  
+
+//+++++++++++
+ muDst = 0;   // NRS: intialization
+ muEvent =0;
+
+
+  outFile="____.root";
+}
+
+//_____________________________________________________________________________
+StJetTreeMcMaker::~StJetTreeMcMaker(){
+  //
+}
+
+//_____________________________________________________________________________
+// Init - is a first method the top level StChain 
+// calls to initialize all its makers 
+Int_t StJetTreeMcMaker::Init(){
+  // Create Histograms 
+
+ 
+  mRandom = new TRandom();
+  File_output = new TFile(outFile,"RECREATE");
+
+  event = new GammaJetEvent();
+  outTree = new TTree("Gfmtodst","Gfmtodst");
+  outTree->SetAutoSave(-500000000);  // autosave activated for each 5 MB
+  
+  eventBranch = outTree->Branch("EventList",&event,1000000);
+  
+  EvValues = new float[81]; // for event info
+
+  //  mMuDstMaker = (StMuDstMaker*)GetMaker("MuDst");
+  
+  return StMaker::Init();
+}
+
+//_____________________________________________________________________________
+/// Make - this method is called in loop for each mStEvent
+Int_t StJetTreeMcMaker::Make()
+{
+  doMuEvent();  
+  //__________
+  doMCEvent();
+
+  return kStOk;
+}
+//_______________________________________
+Int_t StJetTreeMcMaker::doMuEvent()
+{
+
+  muDst =  (StMuDst*) GetInputDS("MuDst");
+  if(!muDst){
+    cout << "No MuDst ....." << endl;
+    return kStOK;
+  }
+  
+  muEvent = (StMuEvent*) muDst->event();
+
+  cout<<" I am Here in MuDSt...."<<endl;
+  Int_t refmult = muEvent->refMult();
+
+  Int_t RunId   = muEvent->runId();
+  Int_t eventId   = muEvent->eventId();
+  
+  //Int_t nPrimaryVertex = 0;
+  //  nPrimaryVertex = muDst->numberOfPrimaryVertices();
+
+  float Vz= 0., Vx=0., Vy=0., Vxy=0.;
+
+  StThreeVectorF Vtx=muEvent->primaryVertexPosition();
+
+  Vz = Vtx.z();
+  Vx = Vtx.x();
+  Vy = Vtx.y();
+
+  Vxy = TMath::Sqrt( Vx*Vx + Vy*Vy );
+
+
+  cout<<"MuEvent:  Refmult= "<<refmult<<"  RunId= "<<RunId<<" evntId= "<<eventId<<" V x y z: "<<Vx<<" "<<Vy<<"  "<<Vz<<endl;
+  
+  
+
+  return kStOk;
+}
+
+///____________________________________________
+Int_t StJetTreeMcMaker::doMCEvent()
+{  
+
+
+  mcEvent =  (StMcEvent*) GetDataSet("StMcEvent");       
+
+  Int_t event_counter =0;
+
+  event->ResetEvent();
+  event_counter++;
+  GammaJetTrack TrackInfo;  
+  //___________________
+  
+  ///______________________________________
+  const StPtrVecMcTrack& mcTracks = mcEvent->primaryVertex()->daughters();
+  StMcTrackConstIterator mcTrkIter = mcTracks.begin();
+  Int_t track_counter = 0;
+  Int_t trkIndex_counter=0;
+
+  for ( ; mcTrkIter != mcTracks.end(); ++mcTrkIter) {
+    StMcTrack* track = *mcTrkIter;
+
+    Double_t mcTrk_px = track->momentum().x();
+    Double_t mcTrk_py = track->momentum().y();
+    Double_t mcTrk_pz = track->momentum().z();
+    Double_t mcTrk_pt = sqrt(mcTrk_px*mcTrk_px + mcTrk_py*mcTrk_py);
+    Double_t mcTrk_eng = track->energy();
+    Double_t mcTrk_eta = track->pseudoRapidity();
+    Int_t    mcTrk_pdgId = track->pdgId();
+    Int_t    mcTrk_geantId = track->geantId();
+
+    Int_t mcTrk_chrg = -9999;
+    Int_t mcTrk_dEdX = -9999;
+    if( track->particleDefinition()){
+      mcTrk_chrg = track->particleDefinition()->charge();
+      mcTrk_dEdX = track->particleDefinition()->pdgEncoding();
+    }
+    else{
+      cout << "Particle with no encoding " << endl;
+      mcTrk_chrg = 0.;
+      mcTrk_dEdX = 0.;
+
+    }
+    Int_t mcTrk_NoOfFitHits = track->tpcHits().size();
+    
+
+
+    TrackInfo.Clear();
+    TrackInfo.SetnHitsFit(0);
+    TrackInfo.SetnHitsPoss(0);
+    TrackInfo.SetTrackFlag(0);
+    TrackInfo.SetPdgId(mcTrk_pdgId);
+    TrackInfo.SetGeantId(mcTrk_geantId);
+    TrackInfo.SetpZ(mcTrk_pz);
+    TrackInfo.SetpY(mcTrk_py);
+    TrackInfo.SetpX(mcTrk_px);
+    TrackInfo.SetpT(mcTrk_pt);
+    TrackInfo.SetdEdx(mcTrk_dEdX);
+    TrackInfo.SetCharge(mcTrk_chrg);
+    TrackInfo.SetTOFBeta(0);
+    TrackInfo.SetEta(mcTrk_eta);
+    TrackInfo.SetPhi(0);
+    TrackInfo.SetnSigElectron(0);
+    TrackInfo.SetnSigPion(0);
+    TrackInfo.SetnSigKaon(0);
+    TrackInfo.SetnSigProton(0);
+    TrackInfo.SetDCAg(0);
+    TrackInfo.SetnHits(0);
+    TrackInfo.SetdEdxHits(0);
+    TrackInfo.SetFirstZPoint(0);
+    TrackInfo.SetLastZPoint(0);
+    TrackInfo.SetTOFSigElectron(0);
+    TrackInfo.SetTOFSigPion(0);
+    TrackInfo.SetTOFSigKaon(0);
+    TrackInfo.SetTOFSigProton(0);
+    TrackInfo.SetPathLength(0);
+    TrackInfo.SettimeOfflight(0);
+    TrackInfo.SettrkIndex(trkIndex_counter);
+
+
+    event->AddTrack(&TrackInfo,track_counter);
+    track_counter++;
+    //    cout<<mcTrk_pz<<"  "<<mcTrk_px<<"   "<<mcTrk_py<<"   "<<mcTrk_chrg<<"   "<<mcTrk_dEdX<<"   "<<mcTrk_NoOfFitHits<<endl;
+    
+    
+  }
+
+
+  Int_t mcEvntNumber = mcEvent->eventNumber();
+  Int_t mcRunNumber = mcEvent->runNumber();
+  Int_t mcEvntRefmult = mcEvent->eventGeneratorFinalStateTracks();
+  //  Int_t mcEvntNtrkCount = nCount;
+  Int_t mcEvntNPrimTrk = mcEvent->numberOfPrimaryTracks();
+  Double_t mcEvntReactPlane =  mcEvent->phiReactionPlane();
+  Double_t mcEvntVrtX = mcEvent->primaryVertex()->position().x();
+  Double_t mcEvntVrtY = mcEvent->primaryVertex()->position().y();
+  Double_t mcEvntVrtZ = mcEvent->primaryVertex()->position().z();
+  
+  
+  cout<<"Event Info "<<mcEvntNumber<<"  "<<mcRunNumber<<"   "<<mcEvntRefmult<<"  "<<mcEvntNPrimTrk<<"   "<<mcEvntReactPlane<<"  "<<mcEvntVrtX<<"  "<<mcEvntVrtY<<"  "<<mcEvntVrtZ<<endl;
+
+  EvValues[0]   = mcRunNumber;
+  EvValues[1]   = mcEvntNumber;
+  EvValues[2]   = 0;  //Trigger Id check getTrgId()
+  EvValues[3]   = 0;
+  EvValues[4]   = mcEvntNPrimTrk;
+  EvValues[5]   = mcEvntRefmult;
+  EvValues[6]   = 0;
+  EvValues[7]   = mcEvntVrtX;
+  EvValues[8]   = mcEvntVrtY;
+  EvValues[9]   = mcEvntVrtZ;
+  EvValues[10]   = 0;
+  EvValues[11]   = 0;      //zdcConincidenceRate
+  EvValues[12]   = 0;   //bbcCoincidenceRate
+  EvValues[13]   = 0;  //backgroundRate
+  EvValues[14]   = 0;  //bbcBlueBackgroundRate
+  EvValues[15]   = 0; //bbcYellowBackgroundRate
+  EvValues[16]   =0;
+  EvValues[17]   =0;
+  EvValues[18]   =0 ; //bTOFTrayMultiplicity (need to add)
+  EvValues[19]   =0;
+  EvValues[20]   = 0;
+  EvValues[80]   = 0;
+
+  event->SetEventAttributes(EvValues);
+
+
+
+  outTree->Fill(); 
+return kStOk;
+ 
+}
+//-----------------------------------------------------------------------------------------------------
+Int_t StJetTreeMcMaker::Finish()
+{
+ //write histogram
+  File_output = outTree->GetCurrentFile();
+  File_output->Write();
+  File_output->Close();
+  return kStOk;
+}
+
+//-----------------------------------------------------------------------------------------------------void
+void  StJetTreeMcMaker::Clear(Option_t *opt)
+{
+  delete [] pTrMatchArr; pTrMatchArr = 0;
+  delete []  pTriMatchEtaArr; pTriMatchEtaArr =0;
+  delete []  pTrMatchPhiArr; pTrMatchPhiArr = 0;
+  delete []  pTrIndexArray; pTrIndexArray = 0;
+  delete []  pTrEtaArray; pTrEtaArray =0;
+  delete []  pTrPhiArray; pTrPhiArray =0;
+
+
+  StMaker::Clear();
+
+  // return kStOk;
+ }
+ 
